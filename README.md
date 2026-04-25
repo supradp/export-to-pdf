@@ -1,3 +1,47 @@
+# export-to-pdf
+
+Минималистичный конвертер **DOCX → PDF** на Next.js, готовый к деплою на Vercel.
+
+## Как работает
+
+- **.docx**: конвертация в HTML через `mammoth`, затем печать в PDF через headless Chromium.
+- **.doc**: на Vercel без внешнего сервиса не поддерживается (в API будет понятная ошибка).
+
+## Запуск локально
+
+```bash
+npm i
+npm run dev
+```
+
+### Важно про Chromium локально
+
+На Vercel Chromium подхватывается автоматически. Локально (Windows/macOS/Linux) нужно указать путь к установленному Chrome/Chromium:
+
+- **PowerShell**:
+
+```powershell
+$env:PUPPETEER_EXECUTABLE_PATH="C:\Program Files\Google\Chrome\Application\chrome.exe"
+npm run dev
+```
+
+Если Chrome не установлен, можно использовать Edge:
+
+```powershell
+$env:PUPPETEER_EXECUTABLE_PATH="C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+npm run dev
+```
+
+## Деплой на Vercel
+
+- Загрузите репозиторий на GitHub
+- Import Project в Vercel
+- Ничего дополнительно настраивать не нужно (по умолчанию будет работать `npm run build`)
+
+## Ограничения
+
+- Большие `.docx` могут упереться в лимиты тела запроса Serverless Functions на Vercel.
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
