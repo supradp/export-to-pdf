@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
     root: __dirname,
   },
   // Required for serverless Chromium packages on Vercel.
-  serverExternalPackages: ["@sparticuz/chromium", "puppeteer-core"],
+  serverExternalPackages: ["@sparticuz/chromium-min", "puppeteer-core"],
 };
 
 export default nextConfig;

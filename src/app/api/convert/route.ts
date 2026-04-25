@@ -1,54 +1,41 @@
-import chromium from "@sparticuz/chromium";
+import chromium from "@sparticuz/chromium-min";
 import mammoth from "mammoth";
 import fs from "node:fs";
 import path from "node:path";
 import puppeteer from "puppeteer-core";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
-function firstExistingPath(candidates: Array<string | undefined | null>) {
+// GitHub Releases pack URL for @sparticuz/chromium-min v131.0.1
+// Override via CHROMIUM_REMOTE_EXEC_PATH env var if you want to host the tar yourself.
+const CHROMIUM_PACK_URL =
+  process.env.CHROMIUM_REMOTE_EXEC_PATH ??
+  "https://github.com/Sparticuz/chromium/releases/download/v131.0.1/chromium-v131.0.1-pack.tar";
+
+// Windows local browser paths for development.
+function guessWindowsExecPath() {
+  const PF = process.env.ProgramFiles;
+  const PF86 = process.env["ProgramFiles(x86)"];
+  const LA = process.env.LOCALAPPDATA;
+  const candidates = [
+    PF && path.join(PF, "Google", "Chrome", "Application", "chrome.exe"),
+    PF86 && path.join(PF86, "Google", "Chrome", "Application", "chrome.exe"),
+    LA && path.join(LA, "Google", "Chrome", "Application", "chrome.exe"),
+    PF && path.join(PF, "Microsoft", "Edge", "Application", "msedge.exe"),
+    PF86 && path.join(PF86, "Microsoft", "Edge", "Application", "msedge.exe"),
+    LA && path.join(LA, "Microsoft", "Edge", "Application", "msedge.exe"),
+  ];
   for (const p of candidates) {
-    if (!p) continue;
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch {
-      // ignore
+    if (p) {
+      try {
+        if (fs.existsSync(p)) return p;
+      } catch {
+        // ignore
+      }
     }
   }
   return undefined;
-}
-
-function pickExecutablePath(opts: {
-  localExecutablePath?: string;
-  chromiumExecutablePath?: string;
-}) {
-  // 1) Explicit user override (local dev)
-  if (opts.localExecutablePath) return opts.localExecutablePath;
-
-  // 2) Vercel/serverless chromium (do not fs.existsSync — it may be extracted lazily)
-  if (opts.chromiumExecutablePath) return opts.chromiumExecutablePath;
-
-  // 3) Best-effort local guess (Windows)
-  if (process.platform === "win32") return guessWindowsBrowserPath();
-
-  return undefined;
-}
-
-function guessWindowsBrowserPath() {
-  const programFiles = process.env.ProgramFiles;
-  const programFilesX86 = process.env["ProgramFiles(x86)"];
-  const localAppData = process.env.LOCALAPPDATA;
-
-  const candidates = [
-    programFiles && path.join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
-    programFilesX86 && path.join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
-    localAppData && path.join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
-    programFiles && path.join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
-    programFilesX86 && path.join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
-    localAppData && path.join(localAppData, "Microsoft", "Edge", "Application", "msedge.exe"),
-  ];
-
-  return firstExistingPath(candidates);
 }
 
 function sanitizeBaseName(name: string) {
@@ -58,12 +45,10 @@ function sanitizeBaseName(name: string) {
 }
 
 function wrapHtml(bodyHtml: string) {
-  // Intentionally minimal: keep doc typography readable in PDF.
   return `<!doctype html>
 <html lang="ru">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       @page { margin: 28mm 22mm; }
       html, body { padding: 0; margin: 0; }
@@ -78,12 +63,9 @@ function wrapHtml(bodyHtml: string) {
       h1, h2, h3 { line-height: 1.25; margin: 0.9em 0 0.35em; }
       p { margin: 0.5em 0; }
       ul, ol { margin: 0.5em 0 0.5em 1.25em; }
-      .mammoth-warning { display: none; }
     </style>
   </head>
-  <body>
-    ${bodyHtml}
-  </body>
+  <body>${bodyHtml}</body>
 </html>`;
 }
 
@@ -103,7 +85,7 @@ export async function POST(req: Request) {
       return Response.json(
         {
           error:
-            "Формат .doc (старый Word) не поддерживается на Vercel без внешнего сервиса. Сохраните файл как .docx и попробуйте снова.",
+            "Формат .doc (старый Word) не поддерживается. Сохраните файл как .docx и попробуйте снова.",
         },
         { status: 415 },
       );
@@ -111,39 +93,40 @@ export async function POST(req: Request) {
 
     if (ext !== "docx") {
       return Response.json(
-        { error: "Поддерживается только .docx (и .doc — с подсказкой)." },
+        { error: "Поддерживается только .docx." },
         { status: 415 },
       );
     }
 
-    const arrayBuffer = await file.arrayBuffer();
-    const docxBuffer = Buffer.from(arrayBuffer);
-
-    const { value: htmlBody } = await mammoth.convertToHtml(
-      { buffer: docxBuffer },
-      {
-        styleMap: [],
-        includeDefaultStyleMap: true,
-      },
-    );
-
+    const buf = Buffer.from(await file.arrayBuffer());
+    const { value: htmlBody } = await mammoth.convertToHtml({ buffer: buf });
     const html = wrapHtml(htmlBody);
 
-    const localExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-    const vercelExecutablePath = await chromium
-      .executablePath()
-      .catch(() => undefined);
+    // Resolve Chromium executable:
+    // 1. Explicit override (local dev)
+    // 2. Vercel/serverless: download from remote URL
+    // 3. Windows fallback (local dev, auto-detect Chrome/Edge)
+    const localOverride = process.env.PUPPETEER_EXECUTABLE_PATH;
+    const isVercel = process.env.VERCEL === "1";
 
-    const execPath = pickExecutablePath({
-      localExecutablePath,
-      chromiumExecutablePath: vercelExecutablePath,
-    });
+    let execPath: string | undefined;
+    let launchArgs: string[] = [];
+
+    if (localOverride) {
+      execPath = localOverride;
+    } else if (isVercel || !process.env.LOCALAPPDATA) {
+      // On Vercel: download and extract Chromium from remote pack
+      execPath = await chromium.executablePath(CHROMIUM_PACK_URL);
+      launchArgs = chromium.args;
+    } else {
+      execPath = guessWindowsExecPath();
+    }
 
     if (!execPath) {
       return Response.json(
         {
           error:
-            "Не найден браузер для генерации PDF. На Vercel это работает автоматически; локально установите Chrome/Edge и задайте PUPPETEER_EXECUTABLE_PATH (путь к chrome.exe/msedge.exe).",
+            "Не найден браузер. Локально задайте переменную PUPPETEER_EXECUTABLE_PATH (путь к chrome.exe / msedge.exe).",
         },
         { status: 500 },
       );
@@ -151,22 +134,16 @@ export async function POST(req: Request) {
 
     const browser = await puppeteer.launch({
       executablePath: execPath,
-      args: localExecutablePath ? [] : chromium.args,
-      // `@sparticuz/chromium` typings change over time; keep this explicit.
+      args: launchArgs,
       defaultViewport: { width: 1280, height: 720 },
       headless: true,
     });
 
     try {
       const page = await browser.newPage();
-      await page.setContent(html, { waitUntil: ["domcontentloaded", "load"] });
-      await page.emulateMediaType("screen");
+      await page.setContent(html, { waitUntil: "networkidle0" });
 
-      const pdf = await page.pdf({
-        format: "A4",
-        printBackground: true,
-      });
-
+      const pdf = await page.pdf({ format: "A4", printBackground: true });
       const outName = `${sanitizeBaseName(fileName)}.pdf`;
 
       return new Response(pdf as unknown as BodyInit, {
@@ -185,4 +162,3 @@ export async function POST(req: Request) {
     return Response.json({ error: message }, { status: 500 });
   }
 }
-
