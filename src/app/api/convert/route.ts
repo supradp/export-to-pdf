@@ -18,6 +18,22 @@ function firstExistingPath(candidates: Array<string | undefined | null>) {
   return undefined;
 }
 
+function pickExecutablePath(opts: {
+  localExecutablePath?: string;
+  chromiumExecutablePath?: string;
+}) {
+  // 1) Explicit user override (local dev)
+  if (opts.localExecutablePath) return opts.localExecutablePath;
+
+  // 2) Vercel/serverless chromium (do not fs.existsSync — it may be extracted lazily)
+  if (opts.chromiumExecutablePath) return opts.chromiumExecutablePath;
+
+  // 3) Best-effort local guess (Windows)
+  if (process.platform === "win32") return guessWindowsBrowserPath();
+
+  return undefined;
+}
+
 function guessWindowsBrowserPath() {
   const programFiles = process.env.ProgramFiles;
   const programFilesX86 = process.env["ProgramFiles(x86)"];
@@ -118,11 +134,10 @@ export async function POST(req: Request) {
       .executablePath()
       .catch(() => undefined);
 
-    const execPath = firstExistingPath([
+    const execPath = pickExecutablePath({
       localExecutablePath,
-      vercelExecutablePath,
-      process.platform === "win32" ? guessWindowsBrowserPath() : undefined,
-    ]);
+      chromiumExecutablePath: vercelExecutablePath,
+    });
 
     if (!execPath) {
       return Response.json(
